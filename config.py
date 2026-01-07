@@ -18,7 +18,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # News Topics
 NEWS_TOPICS = [
-    "Latest news on CES 2026",
+    "Latest news in US",
     "日本のニュース速報",
     "Noticias nacionales de última hora",
     "أخبار محلية عاجلة",
