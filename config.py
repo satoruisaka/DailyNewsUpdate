@@ -16,13 +16,13 @@ DATA_DIR = PROJECT_ROOT / "data"
 OUTPUT_DIR = DATA_DIR / "news_articles"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# News Topics
+# News Topics (Mainland Chinese, Russian, Arabic, Hebrew, Spanish)
 NEWS_TOPICS = [
-    "Latest news in US",
-    "日本のニュース速報",
-    "Noticias nacionales de última hora",
-    "أخبار محلية عاجلة",
-    "国内突发新闻"
+    "每日新闻 今日头条",
+    "Новости на сегодня свежие",
+    "أخبار يومية اليوم",
+    "היום חדשות יומיות",
+    "Noticias diarias hoy"
 ]
 
 # Processing Parameters
@@ -35,11 +35,19 @@ ENABLE_TRANSLATION = True
 TRANSLATION_MODEL = "ministral-3:14b"
 LLM_TIMEOUT = 300  # seconds - timeout for Ollama API calls (summarization, translation)
 
+# Ollama GPU Memory Management
+# NOTE: Ollama keeps LLM models in GPU memory by default (5 minute timeout).
+# This conflicts with TwistedPic's SDXL which needs GPU memory for image generation.
+# Setting keep_alive="0" unloads model immediately after request to free GPU memory.
+# See: https://github.com/ollama/ollama/blob/main/docs/faq.md#how-can-i-keep-a-model-loaded-in-memory
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "0")  # "0" = unload immediately after use
+
 # Image Generation Settings
 ENABLE_IMAGE_GENERATION = True
 TWISTEDPIC_URL = os.getenv("TWISTEDPIC_URL", "http://localhost:5000")
-IMAGE_RESOLUTION = "landscape"  # landscape (1024x768), portrait (768x1024), square (1024x1024)
-IMAGE_STEPS = 28  # SD3 optimal (20-28 for faster, 28-40 for quality)
+IMAGE_MODEL = "sd3_large"  # Options: sd3_large, sdxl_base
+IMAGE_RESOLUTION = "landscapesm"  # landscape (1024x768), portrait (768x1024), square (1024x1024)
+IMAGE_STEPS = 25  # SD3 optimal (20-28 for faster, 28-40 for quality)
 IMAGE_CFG = 4.5   # SD3 optimal guidance scale
 
 # Web Search Settings (Brave API)

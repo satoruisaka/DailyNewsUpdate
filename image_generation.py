@@ -13,6 +13,7 @@ from models import NewsArticle
 from config import (
     ENABLE_IMAGE_GENERATION,
     TWISTEDPIC_URL,
+    IMAGE_MODEL,
     IMAGE_RESOLUTION,
     IMAGE_STEPS,
     IMAGE_CFG
@@ -32,7 +33,7 @@ def generate_article_image(article: NewsArticle) -> NewsArticle:
     
     try:
         # Create a prompt based on article title and summary
-        prompt = f"Photo realistic highly detailed 4k ArtStation concept of {article.topic}: {article.title}. {article.summary[:200]}"
+        prompt = f"Photo realistic image of {article.summary[:200]}"
         logger.info(f"Generated prompt: {prompt[:100]}...")
         
         # Send request to TwistedPic with correct API parameters
@@ -46,11 +47,10 @@ def generate_article_image(article: NewsArticle) -> NewsArticle:
                 "distortion_mode": "echo_er",
                 "distortion_tone": "neutral",
                 "distortion_gain": 5,
-                "image_model": "sd3_large",  # Use SD 3.5 Large (best quality, ~30s)
-                # "image_model": "sdxl_base",  # Alternative: faster but lower quality (~3s)
-                "num_inference_steps": 28,  # Optimized for SD3
-                "guidance_scale": 4.5,      # Optimized for SD3
-                "resolution_preset": "landscape",  # landscape, portrait, or square
+                "image_model": IMAGE_MODEL,  # sd3_large or sdxl_base
+                "num_inference_steps": IMAGE_STEPS,  # Optimized for SD3
+                "guidance_scale": IMAGE_CFG,      # Optimized for SD3
+                "resolution_preset": IMAGE_RESOLUTION,  # landscape, portrait, or square
                 "use_random_seed": True
             },
             timeout=180  # Increased timeout for SD3 generation (~30-60s)

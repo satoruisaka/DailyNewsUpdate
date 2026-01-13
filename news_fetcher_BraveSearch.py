@@ -2,13 +2,6 @@
 News Fetcher Module
 This module handles the core functionality of fetching news articles, processing them
 (translation, summarization), and preparing them for delivery and storage.
-
-Modified to fetch news directly from specific international news websites:
-- Mainland Chinese (Xinhua, CCTV, The Paper, Caixin, China Daily)
-- Russian (TASS, RIA, Kommersant, RBC)
-- Hebrew (Haaretz, Ynet, Israel Hayom, Kan)
-- Arabic (Al Jazeera, Al Arabiya, Asharq, Al-Ahram)
-- Spanish (El País, El Mundo, Clarín)
 """
 
 import os
@@ -18,10 +11,9 @@ import logging
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Tuple
-from urllib.parse import quote, urljoin
+from typing import List, Optional
+from urllib.parse import quote
 from bs4 import BeautifulSoup
-import re
 
 # Import configuration
 from config import (
@@ -34,6 +26,8 @@ from config import (
     ENABLE_IMAGE_GENERATION,
     TWISTEDPIC_URL,
     MAX_ARTICLE_CHARS,
+    BRAVE_API_KEY,
+    BRAVE_API_URL,
     WEB_FETCH_TIMEOUT,
     USER_AGENTS
 )
@@ -48,42 +42,8 @@ from image_generation import generate_article_image
 from email_delivery import send_email
 from integration import save_article_to_mra
 
-# News Website Sources Configuration
-NEWS_SOURCES = {
-    'chinese': [
-        {'name': 'Xinhua', 'url': 'https://www.xinhuanet.com', 'lang': 'zh'},
-        {'name': 'CCTV', 'url': 'https://news.cctv.com', 'lang': 'zh'},
-        {'name': 'The Paper', 'url': 'https://www.thepaper.cn', 'lang': 'zh'},
-        {'name': 'Caixin', 'url': 'https://www.caixin.com', 'lang': 'zh'},
-        {'name': 'China Daily', 'url': 'https://cn.chinadaily.com.cn', 'lang': 'zh'}
-    ],
-    'russian': [
-        {'name': 'TASS', 'url': 'https://tass.ru', 'lang': 'ru'},
-        {'name': 'RIA', 'url': 'https://ria.ru', 'lang': 'ru'},
-        {'name': 'Kommersant', 'url': 'https://www.kommersant.ru', 'lang': 'ru'},
-        {'name': 'RBC', 'url': 'https://www.rbc.ru', 'lang': 'ru'}
-    ],
-    'hebrew': [
-        {'name': 'Haaretz', 'url': 'https://www.haaretz.co.il', 'lang': 'he'},
-        {'name': 'Ynet', 'url': 'https://www.ynet.co.il', 'lang': 'he'},
-        {'name': 'Israel Hayom', 'url': 'https://www.israelhayom.co.il', 'lang': 'he'},
-        {'name': 'Kan News', 'url': 'https://www.kan.org.il', 'lang': 'he'}
-    ],
-    'arabic': [
-        {'name': 'Al Jazeera', 'url': 'https://www.aljazeera.net', 'lang': 'ar'},
-        {'name': 'Al Arabiya', 'url': 'https://www.alarabiya.net', 'lang': 'ar'},
-        {'name': 'Asharq', 'url': 'https://www.asharq.com', 'lang': 'ar'}
-#        {'name': 'Al-Ahram', 'url': 'https://gate.ahram.org.eg', 'lang': 'ar'},
-    ],
-    'spanish': [
-        {'name': 'El País', 'url': 'https://elpais.com', 'lang': 'es'},
-#        {'name': 'El Mundo', 'url': 'https://elmundo.es', 'lang': 'es'},
-        {'name': 'Clarín', 'url': 'https://clarin.com', 'lang': 'es'}
-    ]
-}
-
 class NewsFetcher:
-    """Main class for fetching and processing news articles from international news sources"""
+    """Main class for fetching and processing news articles"""
     
     def __init__(self):
         self.session = requests.Session()
@@ -92,179 +52,94 @@ class NewsFetcher:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         })
         self.logger = logging.getLogger(__name__)
-        self.sources = NEWS_SOURCES
+        self.brave_api_key = BRAVE_API_KEY
         
     def _get_random_user_agent(self) -> str:
         """Get a random user agent from the pool."""
         return random.choice(USER_AGENTS)
-    
+        
     def fetch_articles(self) -> List[NewsArticle]:
-        """Fetches articles from all configured news sources"""
+        """Fetches articles for all configured topics"""
         articles = []
         
-        # Fetch from all language categories
-        for lang_category, sources in self.sources.items():
-            self.logger.info(f"Fetching articles from {lang_category} sources...")
-            for source in sources:
-                self.logger.info(f"  - {source['name']} ({source['url']})")
-                source_articles = self._fetch_from_source(source)
-                articles.extend(source_articles)
-                # Small delay to be polite to servers
-                time.sleep(1)
-        
-        self.logger.info(f"Total articles fetched: {len(articles)}")
+        for topic in NEWS_TOPICS:
+            self.logger.info(f"Fetching articles for topic: {topic}")
+            topic_articles = self._fetch_topic_articles(topic)
+            articles.extend(topic_articles)
+            
         return articles
     
-    def _fetch_from_source(self, source: Dict[str, str]) -> List[NewsArticle]:
-        """Fetch articles from a specific news source"""
+    def _fetch_topic_articles(self, topic: str) -> List[NewsArticle]:
+        """Fetch articles for a specific topic using Brave Web Search API"""
         articles = []
         
+        if not self.brave_api_key:
+            self.logger.error("BRAVE_API_KEY not configured. Cannot fetch articles.")
+            return articles
+        
+        self.logger.info(f"Searching Brave API for: '{topic}'")
+        
+        # Brave API headers and parameters
+        headers = {
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip',
+            'X-Subscription-Token': self.brave_api_key,
+            'User-Agent': self._get_random_user_agent()
+        }
+        
+        params = {
+            'q': " " + topic,
+            'count': NUM_RESULTS_PER_TOPIC,
+            'text_decorations': False,
+            'search_lang': 'en'
+        }
+        
         try:
-            # Fetch the homepage or news section
-            response = self.session.get(
-                source['url'],
-                headers={'User-Agent': self._get_random_user_agent()},
-                timeout=WEB_FETCH_TIMEOUT
+            response = requests.get(
+                BRAVE_API_URL,
+                headers=headers,
+                params=params,
+                timeout=30
             )
             response.raise_for_status()
             
-            # Parse the page
-            soup = BeautifulSoup(response.content, 'html.parser')
+            data = response.json()
             
-            # Extract article links
-            article_links = self._extract_article_links(soup, source)
+            # Parse Brave response
+            web_results = data.get('web', {}).get('results', [])
             
-            # Limit to NUM_RESULTS_PER_TOPIC articles per source
-            article_links = article_links[:NUM_RESULTS_PER_TOPIC]
-            
-            self.logger.info(f"    Found {len(article_links)} article links from {source['name']}")
-            
-            # Fetch each article
-            for link_url, link_title in article_links:
-                try:
-                    # Make URL absolute if needed
-                    if not link_url.startswith('http'):
-                        link_url = urljoin(source['url'], link_url)
-                    
-                    # Fetch article content
-                    content = self._fetch_article_content(link_url)
-                    
-                    if content and len(content) > 100:
-                        article = NewsArticle(
-                            title=link_title or "No title",
-                            url=link_url,
-                            content=content,
-                            summary="",  # Will be generated during processing
-                            source=source['name'],
-                            timestamp=datetime.now().isoformat(),
-                            language=source['lang'],
-                            topic=f"{source['name']} news",
-                            metadata={'source_url': source['url'], 'lang_code': source['lang']}
-                        )
-                        articles.append(article)
-                        self.logger.info(f"      ✓ Fetched: {link_title[:60]}...")
-                    
-                    # Be polite to the server
-                    time.sleep(0.5)
-                    
-                except Exception as e:
-                    self.logger.warning(f"      ✗ Failed to fetch article {link_url}: {e}")
-                    continue
-            
-        except Exception as e:
-            self.logger.error(f"    Error fetching from {source['name']}: {e}")
-        
-        return articles
-    
-    def _extract_article_links(self, soup: BeautifulSoup, source: Dict[str, str]) -> List[Tuple[str, str]]:
-        """Extract article links from a news homepage
-        Returns list of (url, title) tuples
-        """
-        links = []
-        
-        # Common selectors for news article links
-        # Most news sites use <a> tags with specific classes/ids
-        selectors = [
-            'a[href*="/news/"]',
-            'a[href*="/article/"]',
-            'a[href*="/story/"]',
-            'article a',
-            '.article a',
-            '.news a',
-            '.post a',
-            '[class*="article"] a',
-            '[class*="news"] a',
-            'main a',
-            'a[href*="/20"]',  # Many news URLs contain year in path
-            'a[href*="/content/"]',
-            'a[href*="/politics/"]',
-            'a[href*="/world/"]',
-            'a[href*="/national/"]',
-        ]
-        
-        found_links = set()
-        
-        # Try each selector
-        for selector in selectors:
-            try:
-                elements = soup.select(selector)
-                for elem in elements:
-                    href = elem.get('href', '')
-                    title = elem.get_text(strip=True)
-                    
-                    # Skip if no href or title
-                    if not href or not title:
-                        continue
-                    
-                    # Skip if too short (probably navigation)
-                    if len(title) < 10:
-                        continue
-                    
-                    # Skip if looks like navigation/menu
-                    skip_keywords = ['menu', 'login', 'subscribe', 'cookie', 'privacy', 
-                                   'contact', 'about', 'search', 'home', 'archive', 
-                                   'category', 'tag', 'comment']
-                    if any(kw in href.lower() for kw in skip_keywords):
-                        continue
-                    
-                    # Make URL absolute
-                    if not href.startswith('http'):
-                        href = urljoin(source['url'], href)
-                    
-                    # Skip if not from same domain
-                    if not self._is_same_domain(href, source['url']):
-                        continue
-                    
-                    # Add if not already found
-                    if href not in found_links and len(title) > 10:
-                        found_links.add(href)
-                        links.append((href, title))
-                        
-                        # Stop if we have enough
-                        if len(links) >= NUM_RESULTS_PER_TOPIC * 2:
-                            break
+            for item in web_results[:NUM_RESULTS_PER_TOPIC]:
+                title = item.get('title', 'No title')
+                url = item.get('url', '')
+                snippet = item.get('description', '')
                 
-                if len(links) >= NUM_RESULTS_PER_TOPIC * 2:
-                    break
-                    
-            except Exception as e:
-                self.logger.debug(f"Selector {selector} failed: {e}")
-                continue
-        
-        return links
-    
-    def _is_same_domain(self, url1: str, url2: str) -> bool:
-        """Check if two URLs are from the same domain"""
-        try:
-            from urllib.parse import urlparse
-            domain1 = urlparse(url1).netloc
-            domain2 = urlparse(url2).netloc
-            # Remove www. for comparison
-            domain1 = domain1.replace('www.', '')
-            domain2 = domain2.replace('www.', '')
-            return domain1 == domain2
-        except:
-            return False
+                if not url:
+                    continue
+                
+                # Fetch the actual article content
+                article_content = self._fetch_article_content(url)
+                
+                article = NewsArticle(
+                    title=title,
+                    url=url,
+                    content=article_content,
+                    summary=snippet,  # Use snippet as initial summary
+                    source="brave",
+                    timestamp=datetime.now().isoformat(),
+                    language="unknown",  # Will be detected during translation
+                    topic=topic,
+                    metadata={'snippet': snippet}
+                )
+                articles.append(article)
+                
+                self.logger.info(f"Fetched article: {title[:50]}...")
+                
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Brave API request error for topic '{topic}': {e}")
+        except Exception as e:
+            self.logger.error(f"Error fetching articles for topic '{topic}': {e}")
+            
+        return articles
     
     def _fetch_article_content(self, url: str) -> str:
         """Fetch and extract article content from a URL"""

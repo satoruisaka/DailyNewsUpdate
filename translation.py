@@ -8,7 +8,7 @@ import requests
 import logging
 from typing import Optional
 from models import NewsArticle
-from config import TRANSLATION_MODEL, ENABLE_TRANSLATION, LLM_TIMEOUT
+from config import TRANSLATION_MODEL, ENABLE_TRANSLATION, LLM_TIMEOUT, OLLAMA_KEEP_ALIVE
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,8 @@ Text:
             json={
                 "model": TRANSLATION_MODEL,
                 "prompt": prompt,
-                "stream": False
+                "stream": False,
+                "keep_alive": OLLAMA_KEEP_ALIVE  # Free GPU memory immediately after use
             },
             timeout=LLM_TIMEOUT
         )
@@ -87,7 +88,8 @@ Text to translate:
             json={
                 "model": TRANSLATION_MODEL,
                 "prompt": prompt,
-                "stream": False
+                "stream": False,
+                "keep_alive": OLLAMA_KEEP_ALIVE  # Free GPU memory immediately after use
             },
             timeout=LLM_TIMEOUT
         )
