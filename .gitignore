@@ -1,0 +1,22 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+.env
+
+# Data and logs
+data/
+logs/
+*.log
+
+# Markdown files except README
+*.md
+!README.md

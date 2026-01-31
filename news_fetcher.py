@@ -19,7 +19,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 import re
 
@@ -35,7 +35,15 @@ from config import (
     TWISTEDPIC_URL,
     MAX_ARTICLE_CHARS,
     WEB_FETCH_TIMEOUT,
-    USER_AGENTS
+    USER_AGENTS,
+    MANUAL_REDIRECT_HANDLING,
+    MAX_REDIRECTS,
+    REDIRECT_TIMEOUT,
+    ALLOWED_REDIRECT_DOMAINS,
+    BLOCKED_DOMAINS,
+    REQUEST_DELAY_MIN,
+    REQUEST_DELAY_MAX,
+    SOURCE_DELAY
 )
 
 # Import data models
@@ -86,17 +94,106 @@ class NewsFetcher:
     """Main class for fetching and processing news articles from international news sources"""
     
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'MRA-News-Agent/1.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        })
+        # Use isolated sessions per domain to prevent cross-site tracking
+        self.sessions = {}  # Will create session per domain
         self.logger = logging.getLogger(__name__)
         self.sources = NEWS_SOURCES
         
     def _get_random_user_agent(self) -> str:
         """Get a random user agent from the pool."""
         return random.choice(USER_AGENTS)
+    
+    def _get_session(self, domain: str) -> requests.Session:
+        """Get or create an isolated session for a specific domain.
+        This prevents cross-site tracking and cookie sharing.
+        """
+        if domain not in self.sessions:
+            session = requests.Session()
+            # Strict headers - no image/media acceptance
+            session.headers.update({
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',  # NO images
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate',
+                'DNT': '1',  # Do Not Track
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            self.sessions[domain] = session
+            self.logger.debug(f"Created isolated session for domain: {domain}")
+        return self.sessions[domain]
+    
+    def _is_domain_blocked(self, url: str) -> bool:
+        """Check if URL domain is in blocked list (tracking/ad networks)."""
+        try:
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower().replace('www.', '')
+            return any(blocked in domain for blocked in BLOCKED_DOMAINS)
+        except:
+            return False
+    
+    def _is_redirect_allowed(self, url: str) -> bool:
+        """Check if redirect URL is in allowed domains list."""
+        try:
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower().replace('www.', '')
+            return any(allowed in domain for allowed in ALLOWED_REDIRECT_DOMAINS)
+        except:
+            return False
+    
+    def _handle_redirects_manually(self, url: str, session: requests.Session, headers: dict) -> Optional[requests.Response]:
+        """Manually handle redirects with domain validation to prevent tracking.
+        Only follows redirects to whitelisted domains.
+        """
+        redirect_count = 0
+        current_url = url
+        
+        while redirect_count < MAX_REDIRECTS:
+            try:
+                # Check if URL is blocked
+                if self._is_domain_blocked(current_url):
+                    self.logger.warning(f"Blocked redirect to tracking domain: {current_url}")
+                    return None
+                
+                # Make request with redirects disabled
+                response = session.get(
+                    current_url,
+                    headers=headers,
+                    timeout=REDIRECT_TIMEOUT,
+                    allow_redirects=False  # Handle manually
+                )
+                
+                # Check if this is a redirect
+                if response.status_code in (301, 302, 303, 307, 308):
+                    redirect_url = response.headers.get('Location')
+                    if not redirect_url:
+                        self.logger.warning(f"Redirect without Location header: {current_url}")
+                        return response
+                    
+                    # Make redirect URL absolute
+                    if not redirect_url.startswith('http'):
+                        redirect_url = urljoin(current_url, redirect_url)
+                    
+                    # Validate redirect domain
+                    if not self._is_redirect_allowed(redirect_url):
+                        self.logger.warning(f"Redirect to non-whitelisted domain blocked: {redirect_url}")
+                        return response  # Return original response instead of following
+                    
+                    self.logger.debug(f"Following redirect [{redirect_count + 1}/{MAX_REDIRECTS}]: {redirect_url}")
+                    current_url = redirect_url
+                    redirect_count += 1
+                else:
+                    # Not a redirect, return the response
+                    return response
+                    
+            except requests.exceptions.Timeout:
+                self.logger.warning(f"Timeout following redirect: {current_url}")
+                return None
+            except Exception as e:
+                self.logger.warning(f"Error following redirect: {e}")
+                return None
+        
+        self.logger.warning(f"Max redirects ({MAX_REDIRECTS}) exceeded for {url}")
+        return None
     
     def fetch_articles(self) -> List[NewsArticle]:
         """Fetches articles from all configured news sources"""
@@ -109,8 +206,10 @@ class NewsFetcher:
                 self.logger.info(f"  - {source['name']} ({source['url']})")
                 source_articles = self._fetch_from_source(source)
                 articles.extend(source_articles)
-                # Small delay to be polite to servers
-                time.sleep(1)
+                # Randomized delay between sources to avoid rate limiting
+                delay = random.uniform(REQUEST_DELAY_MIN, SOURCE_DELAY)
+                self.logger.debug(f"Waiting {delay:.1f}s before next source...")
+                time.sleep(delay)
         
         self.logger.info(f"Total articles fetched: {len(articles)}")
         return articles
@@ -120,12 +219,31 @@ class NewsFetcher:
         articles = []
         
         try:
-            # Fetch the homepage or news section
-            response = self.session.get(
-                source['url'],
-                headers={'User-Agent': self._get_random_user_agent()},
-                timeout=WEB_FETCH_TIMEOUT
-            )
+            # Get isolated session for this domain
+            parsed = urlparse(source['url'])
+            domain = parsed.netloc.replace('www.', '')
+            session = self._get_session(domain)
+            
+            # Secure headers - no Referer, no image acceptance
+            headers = {
+                'User-Agent': self._get_random_user_agent(),
+                'Referer': source['url']  # Only send referer to same domain
+            }
+            
+            # Fetch the homepage with manual redirect handling if enabled
+            if MANUAL_REDIRECT_HANDLING:
+                response = self._handle_redirects_manually(source['url'], session, headers)
+                if not response:
+                    self.logger.error(f"Failed to fetch {source['name']} - redirect blocked or failed")
+                    return articles
+            else:
+                response = session.get(
+                    source['url'],
+                    headers=headers,
+                    timeout=WEB_FETCH_TIMEOUT,
+                    allow_redirects=True
+                )
+            
             response.raise_for_status()
             
             # Parse the page
@@ -146,8 +264,8 @@ class NewsFetcher:
                     if not link_url.startswith('http'):
                         link_url = urljoin(source['url'], link_url)
                     
-                    # Fetch article content
-                    content = self._fetch_article_content(link_url)
+                    # Fetch article content with domain session
+                    content = self._fetch_article_content(link_url, domain, session)
                     
                     if content and len(content) > 100:
                         article = NewsArticle(
@@ -164,8 +282,9 @@ class NewsFetcher:
                         articles.append(article)
                         self.logger.info(f"      ✓ Fetched: {link_title[:60]}...")
                     
-                    # Be polite to the server
-                    time.sleep(0.5)
+                    # Randomized delay between articles to avoid rate limiting
+                    delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
+                    time.sleep(delay)
                     
                 except Exception as e:
                     self.logger.warning(f"      ✗ Failed to fetch article {link_url}: {e}")
@@ -266,26 +385,39 @@ class NewsFetcher:
         except:
             return False
     
-    def _fetch_article_content(self, url: str) -> str:
-        """Fetch and extract article content from a URL"""
+    def _fetch_article_content(self, url: str, domain: str, session: requests.Session) -> str:
+        """Fetch and extract article content from a URL with security measures."""
         try:
-            # Add headers to mimic a real browser with rotating user agent
+            # Secure headers - NO image/media acceptance, controlled referer
             headers = {
                 'User-Agent': self._get_random_user_agent(),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',  # NO images/media
+                'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate',
+                'DNT': '1',  # Do Not Track
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
+                'Referer': f"https://{domain}"  # Only refer to same domain
             }
             
-            # First, check if it's a redirect or if we can get the actual content
-            response = self.session.get(url, headers=headers, timeout=10, allow_redirects=True)
+            # Check if URL is blocked before fetching
+            if self._is_domain_blocked(url):
+                self.logger.warning(f"Blocked article URL from tracking domain: {url}")
+                return "Failed to fetch article - blocked domain"
+            
+            # Fetch with manual redirect handling if enabled
+            if MANUAL_REDIRECT_HANDLING:
+                response = self._handle_redirects_manually(url, session, headers)
+                if not response:
+                    self.logger.warning(f"Failed to fetch article - redirect blocked: {url}")
+                    return "Failed to fetch article - redirect blocked"
+            else:
+                response = session.get(url, headers=headers, timeout=WEB_FETCH_TIMEOUT, allow_redirects=True)
+            
             response.raise_for_status()
             
-            # If we get a redirect, check the final URL
-            final_url = response.url
-            self.logger.debug(f"Final URL after redirects: {final_url}")
+            # Log final URL for monitoring (but we've already validated it)
+            self.logger.debug(f"Fetched article from: {response.url}")
             
             # Parse HTML content
             soup = BeautifulSoup(response.content, 'html.parser')

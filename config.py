@@ -67,6 +67,34 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 ]
 
+# Security and Anti-Blocking Settings
+MANUAL_REDIRECT_HANDLING = True  # Manually handle redirects to validate domains
+MAX_REDIRECTS = 3  # Maximum number of redirects to follow
+REDIRECT_TIMEOUT = 5  # Timeout for each redirect attempt (seconds)
+
+# Allowed domains for redirects (whitelist approach)
+# Only follow redirects to these known news domains
+ALLOWED_REDIRECT_DOMAINS = [
+    'xinhuanet.com', 'cctv.com', 'thepaper.cn', 'caixin.com', 'chinadaily.com.cn',
+    'tass.ru', 'ria.ru', 'kommersant.ru', 'rbc.ru',
+    'haaretz.co.il', 'ynet.co.il', 'israelhayom.co.il', 'kan.org.il',
+    'aljazeera.net', 'alarabiya.net', 'asharq.com', 'ahram.org.eg',
+    'elpais.com', 'elmundo.es', 'clarin.com'
+]
+
+# Blocked domains (known tracking/ad networks)
+BLOCKED_DOMAINS = [
+    'yahoo.com', 'yimg.com', 'yahooapis.com',
+    'doubleclick.net', 'google-analytics.com', 'googletagmanager.com',
+    'facebook.com', 'fbcdn.net', 'facebook.net',
+    'twitter.com', 'twimg.com',
+    'scorecardresearch.com', 'quantserve.com'
+]
+
+# Request delays to avoid rate limiting
+REQUEST_DELAY_MIN = 2  # Minimum seconds between requests
+REQUEST_DELAY_MAX = 4  # Maximum seconds between requests (randomized)
+SOURCE_DELAY = 3  # Seconds to wait between different news sources
 
 # Scheduling
 FETCH_INTERVAL_HOURS = 24
