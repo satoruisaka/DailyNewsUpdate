@@ -100,7 +100,7 @@ SOURCE_DELAY = 3  # Seconds to wait between different news sources
 FETCH_INTERVAL_HOURS = 24
 
 # MRA Integration
-MRA_DATA_DIR = Path("../MRA/data")
+MRA_DATA_DIR = Path("../TwistedCollab/data")
 MRA_WEB_CACHE_DIR = MRA_DATA_DIR / "web_cache"
 MRA_MARKDOWN_DIR = MRA_DATA_DIR / "markdown" / "news_articles"
 

@@ -16,6 +16,7 @@ __pycache__/
 data/
 logs/
 *.log
+*.backup
 
 # Markdown files except README
 *.md
